@@ -1,0 +1,67 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Admin</title><link rel="stylesheet" href="style.css">
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.js"></script><script src="config.js"></script></head>
+<body><header><b>🍟 Order Desk</b><nav id="tabs"></nav><button onclick="logout()">Logout</button></header><main id="v"></main>
+<script>
+let T="new",menu=[],orders=[],cart={},editId=null,cat="All",F={q:"",s:"",d:""},R=null,tm;
+const ST=["NEW","ACCEPTED","PREPARING","READY","COMPLETED","CANCELLED"];
+async function load(){
+ const a=await sb.from("menu_items").select("*").order("category").order("name");
+ const b=await sb.from("orders").select("*,order_items(*)").order("created_at",{ascending:false}).limit(500);
+ if(a.error||b.error)return alert((a.error||b.error).message);
+ menu=a.data;orders=b.data;
+ if(T=="orders"&&$("ol"))drawOrders();if(T=="new"&&$("grid")){drawGrid();drawCart()}}
+function go(t){T=t;$("tabs").innerHTML=[["new","New Order"],["orders","Orders"],["menu","Menu"],["rep","Reports"]].map(([k,n])=>`<button class="${k==t?"on":""}" onclick="go('${k}')">${n}</button>`).join("");
+ ({new:viewNew,orders:viewOrders,menu:viewMenu,rep:viewRep})[t]()}
+/* ---------- New order ---------- */
+function viewNew(){$("v").innerHTML=`<div class="split"><section><div id="cats" class="chips"></div><div id="grid" class="grid"></div></section><aside class="panel"><h3 id="ct"></h3><div id="lines"></div><div class="tot" id="tot"></div><input id="cn" placeholder="Customer name"><input id="cp" type="tel" placeholder="Phone number"><textarea id="no" placeholder="Order notes (optional)"></textarea><button class="red big" id="pb" onclick="place()"></button><button class="big" onclick="resetCart()">Clear</button></aside></div>`;drawGrid();drawCart()}
+function drawGrid(){const cs=["All",...new Set(menu.map(m=>m.category))];
+ $("cats").innerHTML=cs.map(c=>`<button class="${c==cat?"on":""}" data-c="${esc(c)}" onclick="cat=this.dataset.c;drawGrid()">${esc(c)}</button>`).join("");
+ $("grid").innerHTML=menu.filter(m=>m.is_available&&(cat=="All"||m.category==cat)).map(m=>`<div class="card" onclick="add('${m.id}',1)"><img src="${esc(m.image_url||"")}" onerror="this.style.visibility='hidden'"><b>${esc(m.name)}</b><span>${inr(m.price)}</span>${cart[m.id]?`<i class="badge">${cart[m.id]}</i>`:""}</div>`).join("")||"<p>No items. Add some in the Menu tab.</p>"}
+function add(id,d){cart[id]=(cart[id]||0)+d;if(cart[id]<=0)delete cart[id];drawGrid();drawCart()}
+function drawCart(){const ids=Object.keys(cart);let t=0;
+ $("ct").textContent=editId?"Editing order":"Current order";$("pb").textContent=editId?"SAVE CHANGES":"PLACE ORDER";
+ $("lines").innerHTML=ids.map(id=>{const m=menu.find(x=>x.id==id)||{name:"(removed)",price:0};t+=m.price*cart[id];return`<div class="line"><span>${esc(m.name)}</span><span><button onclick="add('${id}',-1)">−</button> <b>${cart[id]}</b> <button onclick="add('${id}',1)">+</button></span></div>`}).join("")||"<p>Tap food to add</p>";
+ $("tot").textContent="Total "+inr(t)}
+function resetCart(){cart={};editId=null;go("new")}
+async function place(){const items=Object.entries(cart).map(([id,qty])=>({id,qty}));
+ const a={p_name:$("cn").value.trim(),p_phone:$("cp").value.trim(),p_notes:$("no").value.trim(),p_items:items};
+ if(!items.length)return alert("Add at least one item");if(!a.p_name||!a.p_phone)return alert("Enter customer name and phone (7-15 digits)");
+ const r=editId?await sb.rpc("update_order",{p_id:editId,...a}):await sb.rpc("place_order",a);
+ if(r.error)return alert(r.error.message);cart={};editId=null;await load();go("orders")}
+function startEdit(id){const o=orders.find(x=>x.id==id);cart={};o.order_items.forEach(i=>i.menu_item_id&&(cart[i.menu_item_id]=i.quantity));editId=id;go("new");$("cn").value=o.customer_name;$("cp").value=o.customer_phone;$("no").value=o.notes||""}
+/* ---------- Orders ---------- */
+function viewOrders(){$("v").innerHTML=`<div class="bar"><input placeholder="Search name or phone" value="${esc(F.q)}" oninput="F.q=this.value;drawOrders()"><select onchange="F.s=this.value;drawOrders()"><option value="">All statuses</option>${ST.map(s=>`<option ${F.s==s?"selected":""}>${s}</option>`).join("")}</select><input type="date" value="${F.d}" onchange="F.d=this.value;drawOrders()"></div><div id="ol"></div>`;drawOrders()}
+function drawOrders(){const q=F.q.toLowerCase();
+ $("ol").innerHTML=orders.filter(o=>(!q||o.customer_name.toLowerCase().includes(q)||o.customer_phone.includes(q))&&(!F.s||o.status==F.s)&&(!F.d||ld(o.created_at)==F.d)).map(o=>`<details class="ord"><summary><b>#${o.order_number}</b> ${esc(o.customer_name)} · ${esc(o.customer_phone)} <span class="st ${o.status}">${o.status}</span> <b>${inr(o.total_amount)}</b> <small>${new Date(o.created_at).toLocaleString()}</small></summary><ul>${o.order_items.map(i=>`<li>${i.quantity}× ${esc(i.food_name_snapshot)} @ ${inr(i.price_snapshot)} = ${inr(i.subtotal)}</li>`).join("")}</ul>${o.notes?`<p>📝 ${esc(o.notes)}</p>`:""}<div class="acts">${["NEW","ACCEPTED"].includes(o.status)?`<button onclick="startEdit('${o.id}')">Edit</button>`:""}${["COMPLETED","CANCELLED"].includes(o.status)?"":`<button class="red" onclick="cancelO('${o.id}')">Cancel order</button>`}</div></details>`).join("")||"<p>No orders found.</p>"}
+async function cancelO(id){if(!confirm("Cancel this order?"))return;const r=await sb.rpc("set_status",{p_id:id,p_status:"CANCELLED"});if(r.error)alert(r.error.message);load()}
+/* ---------- Menu ---------- */
+async function up(f){if(!f)return null;const p=Date.now()+"_"+f.name.replace(/[^\w.]/g,"");const r=await sb.storage.from("food").upload(p,f);if(r.error)throw r.error;return sb.storage.from("food").getPublicUrl(p).data.publicUrl}
+function viewMenu(){const cs=[...new Set(menu.map(m=>m.category).concat(["Basket Chaat","Corn Bhel","Lemonade"]))];
+ $("v").innerHTML=`<div class="panel"><h3>Add food</h3><div class="row"><input id="mn" placeholder="Name"><input id="mp" type="number" step="0.01" min="0" placeholder="Price"><input id="mc" list="cl" placeholder="Category"></div><datalist id="cl">${cs.map(c=>`<option value="${esc(c)}">`).join("")}</datalist><input id="md" placeholder="Description (optional)"><input id="mf" type="file" accept="image/*"><button class="red" onclick="addFood()">Add food</button> <button onclick="renameCat()">Rename category</button></div>`+menu.map(m=>`<div class="panel mi" id="m${m.id}"><img src="${esc(m.image_url||"")}" onerror="this.style.visibility='hidden'"><input value="${esc(m.name)}" data-f="name"><input type="number" step="0.01" value="${m.price}" data-f="price"><input value="${esc(m.category)}" data-f="category"><label><input type="checkbox" data-f="is_available" ${m.is_available?"checked":""} style="width:auto"> Available</label><input type="file" accept="image/*" data-f="img"><button onclick="saveFood('${m.id}')">Save</button><button class="red" onclick="delFood('${m.id}')">Delete</button></div>`).join("")}
+async function addFood(){try{const price=parseFloat($("mp").value);if(!$("mn").value.trim()||isNaN(price)||price<0)return alert("Enter a name and valid price");
+ const image_url=await up($("mf").files[0]);const r=await sb.from("menu_items").insert({name:$("mn").value.trim(),price,category:$("mc").value.trim()||"General",description:$("md").value.trim()||null,image_url});
+ if(r.error)throw r.error;await load();viewMenu()}catch(e){alert(e.message)}}
+async function saveFood(id){try{const el=$("m"+id),v={};el.querySelectorAll("[data-f]").forEach(i=>{const f=i.dataset.f;if(f=="img")return;v[f]=i.type=="checkbox"?i.checked:i.value});
+ v.price=parseFloat(v.price);const img=await up(el.querySelector('[data-f="img"]').files[0]);if(img)v.image_url=img;
+ const r=await sb.from("menu_items").update(v).eq("id",id);if(r.error)throw r.error;await load();viewMenu()}catch(e){alert(e.message)}}
+async function delFood(id){if(!confirm("Delete this item? Past orders keep their names and prices. (You can untick Available instead.)"))return;const r=await sb.from("menu_items").delete().eq("id",id);if(r.error)alert(r.error.message);cart={};await load();viewMenu()}
+async function renameCat(){const o=prompt("Category to rename:");if(!o)return;const n=prompt("New name:");if(!n)return;const r=await sb.from("menu_items").update({category:n.trim()}).eq("category",o);if(r.error)alert(r.error.message);await load();viewMenu()}
+/* ---------- Reports ---------- */
+function viewRep(){$("v").innerHTML=`<div class="bar"><input type="date" id="rf" value="${ld(Date.now()-6*864e5)}"><input type="date" id="rt" value="${ld(Date.now())}"><button class="red" onclick="runRep()">Show</button><button onclick="csv()">Export CSV</button></div><div id="rp"></div>`;runRep()}
+async function runRep(){const f=new Date($("rf").value+"T00:00:00"),t=new Date($("rt").value+"T00:00:00");t.setDate(t.getDate()+1);
+ const r=await sb.from("orders").select("*,order_items(*)").gte("created_at",f.toISOString()).lt("created_at",t.toISOString()).order("created_at");
+ if(r.error)return alert(r.error.message);R=r.data;
+ const ok=R.filter(o=>o.status!="CANCELLED"),sum=a=>a.reduce((s,o)=>s+Number(o.total_amount),0),td=ld(Date.now());
+ const today=sum(orders.filter(o=>o.status!="CANCELLED"&&ld(o.created_at)==td)),days={},items={};
+ ok.forEach(o=>{const d=ld(o.created_at);days[d]=(days[d]||0)+Number(o.total_amount);o.order_items.forEach(i=>{items[i.food_name_snapshot]=(items[i.food_name_snapshot]||0)+i.quantity})});
+ const bars=(rows,fmt)=>{const m=Math.max(1,...rows.map(r=>r[1]));return rows.map(([k,v])=>`<div class="bar2"><span>${esc(k)}</span><div><i style="width:${v/m*100}%"></i></div><b>${fmt(v)}</b></div>`).join("")||"<p>No data</p>"};
+ $("rp").innerHTML=`<div class="stats" style="margin:10px 0">${[["Today's sales",inr(today)],["Sales in range",inr(sum(ok))],["Total orders",R.length],["Completed",R.filter(o=>o.status=="COMPLETED").length],["Cancelled",R.filter(o=>o.status=="CANCELLED").length]].map(([a,b])=>`<div class="card"><small>${a}</small><b style="font-size:1.4rem">${b}</b></div>`).join("")}</div><div class="panel"><h3>Daily sales</h3>${bars(Object.entries(days),inr)}</div><div class="panel"><h3>Popular items (quantity sold)</h3>${bars(Object.entries(items).sort((a,b)=>b[1]-a[1]),v=>v)}</div>`}
+function csv(){if(!R)return;const q=v=>{v=String(v??"");if(/^[=+@-]/.test(v))v="'"+v;return'"'+v.replace(/"/g,'""')+'"'};
+ const rows=[["Order","Date","Customer","Phone","Status","Item","Qty","Price","Subtotal"]];R.forEach(o=>o.order_items.forEach(i=>rows.push([o.order_number,o.created_at,o.customer_name,o.customer_phone,o.status,i.food_name_snapshot,i.quantity,i.price_snapshot,i.subtotal])));
+ const a=document.createElement("a");a.href=URL.createObjectURL(new Blob([rows.map(r=>r.map(q).join(",")).join("\n")],{type:"text/csv"}));a.download="sales.csv";a.click()}
+/* ---------- Start + realtime ---------- */
+const refresh=()=>{clearTimeout(tm);tm=setTimeout(load,300)};
+guard("admin").then(async p=>{if(!p)return;await load();go("new");
+ sb.channel("a").on("postgres_changes",{event:"*",schema:"public",table:"orders"},refresh).on("postgres_changes",{event:"*",schema:"public",table:"order_items"},refresh).on("postgres_changes",{event:"*",schema:"public",table:"menu_items"},refresh).subscribe();
+ setInterval(load,30000)});
+</script></body></html>

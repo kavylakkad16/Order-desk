@@ -1,0 +1,11 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Login</title><link rel="stylesheet" href="style.css">
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.js"></script><script src="config.js"></script></head>
+<body><div class="login"><h1>🍟 Order Desk</h1><input id="e" type="email" placeholder="Email" autocomplete="username"><input id="p" type="password" placeholder="Password" autocomplete="current-password"><button class="red big" onclick="go()">Sign in</button><p id="m" style="color:#d62300"></p></div>
+<script>
+async function go(){$("m").textContent="";const r=await sb.auth.signInWithPassword({email:$("e").value.trim(),password:$("p").value});
+if(r.error)return $("m").textContent=r.error.message;route()}
+async function route(){const{data:{session}}=await sb.auth.getSession();if(!session)return;
+const{data:p}=await sb.from("profiles").select("role").eq("id",session.user.id).single();
+if(!p)return $("m").textContent="No role assigned to this account yet.";location.href=p.role==="admin"?"admin.html":"kitchen.html"}
+route();
+</script></body></html>

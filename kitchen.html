@@ -1,0 +1,19 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Kitchen</title><link rel="stylesheet" href="style.css">
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.js"></script><script src="config.js"></script></head>
+<body><header><b style="flex:1;font-size:1.3rem">👨‍🍳 Kitchen</b><span id="n"></span><button onclick="logout()">Logout</button></header><main><div class="cols" id="c"></div></main>
+<script>
+let orders=[];
+const NX={NEW:["ACCEPTED","Accept order"],ACCEPTED:["PREPARING","Start preparing"],PREPARING:["READY","Mark READY"],READY:["COMPLETED","Complete"]};
+const COLS=["NEW","ACCEPTED","PREPARING","READY","CANCELLED"];
+async function load(){
+ const since=new Date(Date.now()-864e5).toISOString();
+ const r=await sb.from("orders").select("*,order_items(*)").or(`status.in.(NEW,ACCEPTED,PREPARING,READY),and(status.eq.CANCELLED,created_at.gte.${since})`).order("created_at");
+ if(r.error)return $("n").textContent=r.error.message;orders=r.data;draw()}
+function draw(){
+ $("n").textContent=orders.filter(o=>o.status!="CANCELLED").length+" active";
+ $("c").innerHTML=COLS.map(s=>`<div><h2>${s==="CANCELLED"?"Cancelled":s}</h2>${orders.filter(o=>o.status===s).map(o=>`<div class="kc" ${s=="CANCELLED"?'style="opacity:.6;border-color:#888"':""}><b style="font-size:1.4rem">#${o.order_number}</b> <span class="st ${o.status}">${o.status}</span><div>${esc(o.customer_name)} · ${esc(o.customer_phone)}</div><small>${new Date(o.created_at).toLocaleTimeString()}</small><ul>${o.order_items.map(i=>`<li><b>${i.quantity}×</b> ${esc(i.food_name_snapshot)}</li>`).join("")}</ul>${o.notes?`<div style="background:#fff3c4;padding:8px;border-radius:8px">📝 ${esc(o.notes)}</div>`:""}${NX[s]?`<button class="red" onclick="set('${o.id}','${NX[s][0]}')">${NX[s][1]}</button>`:""}</div>`).join("")}</div>`).join("")}
+async function set(id,s){const r=await sb.rpc("set_status",{p_id:id,p_status:s});if(r.error)alert(r.error.message);load()}
+guard("kitchen").then(p=>{if(!p)return;load();
+ sb.channel("k").on("postgres_changes",{event:"*",schema:"public",table:"orders"},()=>setTimeout(load,300)).on("postgres_changes",{event:"*",schema:"public",table:"order_items"},()=>setTimeout(load,300)).subscribe();
+ setInterval(load,30000)});
+</script></body></html>
